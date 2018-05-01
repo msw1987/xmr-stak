@@ -3,10 +3,14 @@
 #include "xmrstak/misc/console.hpp"
 #include "xmrstak/jconf.hpp"
 
+#include "xmrstak/backend/amd/amd_gpu/adl.hpp"
+
 #if defined(__APPLE__)
 #include <OpenCL/cl.h>
+#include <OpenCL/cl_ext.h>
 #else
 #include <CL/cl.h>
+#include <CL/cl_ext.h>
 #endif
 
 #include <stdint.h>
@@ -43,7 +47,20 @@ struct GpuContext
 	std::string name;
 
 	uint32_t Nonce;
-
+	
+	/* pci-e */
+	int pcie_b;
+	int pcie_d;
+	int pcie_f;
+	
+	/* overdriven */
+	int overdriven_idx;
+	
+	
+	int(*temperature)(int _overdriven_idx);
+	int (*fanspeed)(int adapter_index, int *currentFanSpeed, int *targetFanSpeed);
+	int (*performance)(int adapter_index, int *coreClock, int *memClock);
+	
 };
 
 uint32_t getNumPlatforms();

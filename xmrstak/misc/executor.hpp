@@ -98,6 +98,8 @@ private:
 	bool motd_filter_console(std::string& motd);
 	bool motd_filter_web(std::string& motd);
 
+	void amd_report(std::string& out);
+
 	void hashrate_report(std::string& out);
 	void result_report(std::string& out);
 	void connection_report(std::string& out);
@@ -159,6 +161,12 @@ private:
 		}
 	};
 	std::vector<result_tally> vMineResults;
+
+	struct result_per_card
+	{
+		int adapter_idx;
+		double total;
+	};
 
 	//More result statistics
 	std::array<size_t, 10> iTopDiff { { } }; //Initialize to zero

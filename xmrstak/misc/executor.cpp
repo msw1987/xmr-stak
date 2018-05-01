@@ -627,7 +627,7 @@ void executor::ex_main()
 			break;
 
 		case EV_GPU_RES_ERROR:
-			log_result_error(std::string(ev.oGpuError.error_str + std::string(" GPU ID ") + std::to_string(ev.oGpuError.idx)));
+			log_result_error(std::string(ev.oGpuError.error_str + std::string(" GPU ID/OA ") + std::to_string(ev.oGpuError.idx) + "/" + std::to_string(ev.oGpuError.overdriven_idx)));
 			break;
 
 		case EV_PERF_TICK:
@@ -659,7 +659,8 @@ void executor::ex_main()
 					fHighestHps = fHps;
 			}
 			break;
-
+		
+		case EV_USR_AMD:
 		case EV_USR_HASHRATE:
 		case EV_USR_RESULTS:
 		case EV_USR_CONNSTAT:
@@ -845,6 +846,146 @@ void executor::hashrate_report(std::string& out)
 	out.append("-----------------------------------------------------------------\n");
 }
 
+void executor::amd_report(std::string& out)
+{
+	out.reserve(2048 + pvThreads->size() * 64);
+
+	char num[32];
+	char temp[512];
+	double fTotal[3] = { 0.0, 0.0, 0.0 };
+
+	for (uint32_t b = 0; b < 4u; ++b)
+	{
+		std::vector<xmrstak::iBackend*> backEnds;
+		std::copy_if(pvThreads->begin(), pvThreads->end(), std::back_inserter(backEnds),
+			[&](xmrstak::iBackend* backend)
+		{
+			return backend->backendType == b;
+		}
+		);
+
+		size_t nthd = backEnds.size();
+		if (nthd != 0)
+		{
+			size_t i;
+			auto bType = static_cast<xmrstak::iBackend::BackendType>(b);
+			std::string name(xmrstak::iBackend::getName(bType));
+			std::transform(name.begin(), name.end(), name.begin(), ::toupper);
+			std::list<int> adapters;
+			std::vector<result_per_card> total_per_card;
+
+			if (name != "AMD")
+				continue;
+
+			out.append("HASHRATE REPORT - ").append(name).append("\n");
+			out.append("| ID/OA |    10s |    60s |    15m |");
+			if (nthd != 1)
+				out.append(" ID/OA |    10s |    60s |    15m |\n");
+			else
+				out.append(1, '\n');
+
+			double fTotalCur[3] = { 0.0, 0.0, 0.0 };
+			for (i = 0; i < nthd; i++)
+			{
+				double fHps[3];
+
+				uint32_t tid = backEnds[i]->iThreadNo;
+				fHps[0] = telem->calc_telemetry_data(10000, tid);
+				fHps[1] = telem->calc_telemetry_data(60000, tid);
+				fHps[2] = telem->calc_telemetry_data(900000, tid);
+
+				bool _found = false;
+				for (int x = 0; x < total_per_card.size(); x++)
+				{
+					if (total_per_card[x].adapter_idx == backEnds[i]->overdriven_idx)
+					{
+						total_per_card[x].total += fHps[0];
+						_found = true;
+						break;
+					}
+				}
+
+				if (!_found)
+				{
+					result_per_card rpc;
+					rpc.adapter_idx = backEnds[i]->overdriven_idx;
+					rpc.total = fHps[0];
+					total_per_card.push_back(rpc);
+				}
+
+				snprintf(num, sizeof(num), "| %2u/%2d |", (unsigned int)i, backEnds[i]->overdriven_idx);
+				out.append(num);
+				out.append(hps_format(fHps[0], num, sizeof(num))).append(" |");
+				out.append(hps_format(fHps[1], num, sizeof(num))).append(" |");
+				out.append(hps_format(fHps[2], num, sizeof(num))).append(1, ' ');
+
+				fTotal[0] += (std::isnormal(fHps[0])) ? fHps[0] : 0.0;
+				fTotal[1] += (std::isnormal(fHps[1])) ? fHps[1] : 0.0;
+				fTotal[2] += (std::isnormal(fHps[2])) ? fHps[2] : 0.0;
+
+				fTotalCur[0] += (std::isnormal(fHps[0])) ? fHps[0] : 0.0;
+				fTotalCur[1] += (std::isnormal(fHps[1])) ? fHps[1] : 0.0;
+				fTotalCur[2] += (std::isnormal(fHps[2])) ? fHps[2] : 0.0;
+
+				if ((i & 0x1) == 1) //Odd i's
+					out.append("|\n");
+
+				bool exists = (std::find(adapters.begin(), adapters.end(), backEnds[i]->overdriven_idx) != adapters.end());
+
+				if (!exists)
+					adapters.push_back(backEnds[i]->overdriven_idx);
+			}
+
+			if ((i & 0x1) == 1) //We had odd number of threads
+				out.append("|\n");
+
+			out.append("Totals (").append(name).append("): ");
+			out.append(hps_format(fTotalCur[0], num, sizeof(num)));
+			out.append(hps_format(fTotalCur[1], num, sizeof(num)));
+			out.append(hps_format(fTotalCur[2], num, sizeof(num)));
+			out.append(" H/s\n");
+
+			out.append("-----------------------------------------------------------------\n");
+
+			for (i = 0; i < nthd; i++)
+			{
+				bool exists = (std::find(adapters.begin(), adapters.end(), backEnds[i]->overdriven_idx) != adapters.end());
+
+				if (exists)
+				{
+					int tempValue = backEnds[i]->temperature(backEnds[i]->overdriven_idx) / 1000;
+					int currentFanSpeed;
+					int targetFanSpeed;
+					int coreClock;
+					int memClock;
+					double total = 0.0;
+					char nTmp[32];
+					memset(nTmp, 0, 32);
+
+					for (int x = 0; x < total_per_card.size(); x++)
+					{
+						if (total_per_card[x].adapter_idx == backEnds[i]->overdriven_idx)
+						{
+							total = total_per_card[x].total;
+							hps_format(total, nTmp, sizeof(nTmp));
+							break;
+						}
+					}
+
+					backEnds[i]->fanspeed(backEnds[i]->overdriven_idx, &currentFanSpeed, &targetFanSpeed);
+					backEnds[i]->performance(backEnds[i]->overdriven_idx, &coreClock, &memClock);
+					sprintf(temp, "OverdriveN[%2d] total: %s H/s | temp: %2dC | fanspeed: %4dRPM | cclk: %4dMHz | mclk: %4dMHz\n", backEnds[i]->overdriven_idx, nTmp, tempValue, currentFanSpeed, coreClock/100, memClock/100);
+					adapters.remove(backEnds[i]->overdriven_idx);
+					out.append(temp);
+				}
+				
+			}
+		}
+	}
+
+	
+}
+
 char* time_format(char* buf, size_t len, std::chrono::system_clock::time_point time)
 {
 	time_t ctime = std::chrono::system_clock::to_time_t(time);
@@ -917,10 +1058,10 @@ void executor::result_report(std::string& out)
 	out.append("\nError details:\n");
 	if(ln > 1)
 	{
-		out.append("| Count | Error text                       | Last seen           |\n");
+		out.append("| Count | Error text                             | Last seen           |\n");
 		for(size_t i=1; i < ln; i++)
 		{
-			snprintf(num, sizeof(num), "| %5llu | %-32.32s | %s |\n", int_port(vMineResults[i].count),
+			snprintf(num, sizeof(num), "| %5llu | %-35.35s    | %s |\n", int_port(vMineResults[i].count),
 				vMineResults[i].msg.c_str(), time_format(date, sizeof(date), vMineResults[i].time));
 			out.append(num);
 		}
@@ -978,6 +1119,10 @@ void executor::print_report(ex_event_name ev)
 	std::string out;
 	switch(ev)
 	{
+	case EV_USR_AMD:
+		amd_report(out);
+		break;
+
 	case EV_USR_HASHRATE:
 		hashrate_report(out);
 		break;

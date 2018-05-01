@@ -1,6 +1,7 @@
 #pragma once
 
 #include "xmrstak/backend/globalStates.hpp"
+#include "xmrstak/backend/amd/amd_gpu/adl.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -37,9 +38,14 @@ namespace xmrstak
 			return backendNames[i];
 		}
 
+		int(*temperature)(int _adapter_index);
+		int (*fanspeed)(int adapter_index, int *currentFanSpeed, int *targetFanSpeed);
+		int (*performance)(int adapter_index, int *coreClock, int *memClock);
+		
 		std::atomic<uint64_t> iHashCount;
 		std::atomic<uint64_t> iTimestamp;
 		uint32_t iThreadNo;
+		int overdriven_idx;
 		BackendType backendType = UNKNOWN;
 
 		iBackend() : iHashCount(0), iTimestamp(0)

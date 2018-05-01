@@ -57,6 +57,10 @@ minethd::minethd(miner_work& pWork, size_t iNo, GpuContext* ctx, const jconf::th
 	iHashCount = 0;
 	iTimestamp = 0;
 	pGpuCtx = ctx;
+	overdriven_idx = pGpuCtx->overdriven_idx;
+	temperature = pGpuCtx->temperature;
+	fanspeed = pGpuCtx->fanspeed;
+	performance = pGpuCtx->performance;
 	this->affinity = cfg.cpu_aff;
 
 	std::unique_lock<std::mutex> lck(thd_aff_set);

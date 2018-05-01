@@ -275,13 +275,35 @@ size_t InitOpenCLGpu(cl_context opencl_ctx, GpuContext* ctx, const char* source_
 {
 	size_t MaximumWorkSize;
 	cl_int ret;
+	cl_device_topology_amd amd_topology;
 
 	if((ret = clGetDeviceInfo(ctx->DeviceID, CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(size_t), &MaximumWorkSize, NULL)) != CL_SUCCESS)
 	{
 		printer::inst()->print_msg(L1,"Error %s when querying a device's max worksize using clGetDeviceInfo.", err_to_str(ret));
 		return ERR_OCL_API;
 	}
+			
+	if(ret = clGetDeviceInfo(ctx->DeviceID, CL_DEVICE_TOPOLOGY_AMD, sizeof(cl_device_topology_amd), &amd_topology, NULL) == CL_SUCCESS)
+	{		
+		if (initializeADL())
+		{
+			adl_adapterInfoInit();
+			
+			ctx->pcie_b = (int)amd_topology.pcie.bus;
+			ctx->pcie_d = (int)amd_topology.pcie.device;
+			ctx->pcie_f = (int)amd_topology.pcie.function;
+			ctx->overdriven_idx = adl_getOvedriveNidx(ctx->pcie_b, ctx->pcie_d, ctx->pcie_f);
+			ctx->temperature = &adl_getTemperature;
+			ctx->fanspeed = &adl_getFanInfo;
+			ctx->performance = &adl_getPerformanceStatus;
 
+			deinitializeADL();
+		}
+	} else
+	{
+		printer::inst()->print_msg(L1,"WARNING: %s when calling clGetDeviceInfo to get CL_DEVICE_TOPOLOGY_AMD for device %u.", err_to_str(ret), ctx->DeviceID);
+	}
+	
 	/* Some kernel spawn 8 times more threads than the user is configuring.
 	 * To give the user the correct maximum work size we divide the hardware specific max by 8.
 	 */
@@ -637,6 +659,9 @@ std::vector<GpuContext> getAMDDevices(int index)
 	std::vector<GpuContext> ctxVec;
 	std::vector<cl_platform_id> platforms;
 	std::vector<cl_device_id> device_list;
+	
+	/* adl */
+	bool adl_enabled = false;
 
 	cl_int clStatus;
 	cl_uint num_devices;
@@ -665,6 +690,12 @@ std::vector<GpuContext> getAMDDevices(int index)
 		return ctxVec;
 	}
 
+	if (initializeADL())
+	{
+		adl_adapterInfoInit();
+		adl_enabled = true;
+	}
+	
 	for (size_t k = 0; k < num_devices; k++)
 	{
 		std::vector<char> devVendorVec(1024);
@@ -716,16 +747,31 @@ std::vector<GpuContext> getAMDDevices(int index)
 				continue;
 			}
 
+			cl_device_topology_amd amd_topology;
+			
+			if((clStatus = clGetDeviceInfo(device_list[k], CL_DEVICE_TOPOLOGY_AMD, sizeof(cl_device_topology_amd), &amd_topology, NULL)) != CL_SUCCESS)
+			{
+				printer::inst()->print_msg(L1,"WARNING: %s when calling clGetDeviceInfo to get CL_DEVICE_TOPOLOGY_AMD for device %u.", err_to_str(clStatus), k);
+				continue;
+			}
+			
 			// if environment variable GPU_SINGLE_ALLOC_PERCENT is not set we can not allocate the full memory
 			ctx.deviceIdx = k;
 			ctx.freeMem = std::min(ctx.freeMem, maxMem);
 			ctx.name = std::string(devNameVec.data());
 			ctx.DeviceID = device_list[k];
-			printer::inst()->print_msg(L0,"Found OpenCL GPU %s.",ctx.name.c_str());
+			ctx.pcie_b = (int)amd_topology.pcie.bus;
+			ctx.pcie_d = (int)amd_topology.pcie.device;
+			ctx.pcie_f = (int)amd_topology.pcie.function;
+			ctx.overdriven_idx = adl_getOvedriveNidx(ctx.pcie_b, ctx.pcie_d, ctx.pcie_f);
+			printer::inst()->print_msg(L0,"Found OpenCL GPU %s. PCI-E[ B#%d, D#%d, F#%d ] - OverdriveN Adapter idx: %d", ctx.name.c_str(), ctx.pcie_b, ctx.pcie_d, ctx.pcie_f, ctx.overdriven_idx);
 			ctxVec.push_back(ctx);
 		}
 	}
 
+	if (adl_enabled)
+		deinitializeADL();
+	
 	return ctxVec;
 }
 
